@@ -55,7 +55,10 @@ float EncoderVel = 0;
 uint64_t Timestamp_Encoder = 0;
 float  vrpm = 0;
 uint16_t pwm = 0;
-float require = 0.4;
+float require = 60;
+int32_t EncoderPositionDiff;
+uint64_t EncoderTimeDiff;
+int r1 = 980;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -126,42 +129,36 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-		//RAW Read
-//		if (micros() - Timestamp_Encoder >= 1000)
-//		{
-//			Timestamp_Encoder = micros();
-//			EncoderVel = EncoderVelocity_Update();
-//		}
-		if(require<0){
+//
+		if(require>0){
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 1);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, 0);
 		}
-		else if(require>0){
+		else if(require<0){
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, 1);
 		}
-		//Add LPF?
+//		//Add LPF?
 		if (micros() - Timestamp_Encoder >= 10000)
 		{
 			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm);
 			Timestamp_Encoder = micros();
 			EncoderVel = (EncoderVel * 2 + EncoderVelocity_Update()) / 3;
-			vrpm = EncoderVel /3072 *60;
+			vrpm = EncoderVel / 980 *60;
 			if(require>0){
 				if(vrpm < require){
-					pwm += 100;
+					pwm += 10;
 				}
 				else if (vrpm>require){
-					pwm-=100;
+					pwm-=10;
 				}
 			}
 			if(require<0){
 				if(vrpm > require){
-					pwm += 100;
+					pwm += 10;
 				}
 				else if (vrpm<require){
-					pwm-=100;
+					pwm-=10;
 				}
 			}
 		}
@@ -251,7 +248,7 @@ static void MX_ADC1_Init(void)
   }
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Channel = ADC_CHANNEL_4;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
@@ -285,7 +282,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 3071;
+  htim1.Init.Period = 980;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -404,7 +401,7 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 5000;
+  sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
@@ -483,7 +480,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_1|LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -491,19 +488,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : PA0 PA1 LD2_Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 }
 
 /* USER CODE BEGIN 4 */
 #define  HTIM_ENCODER htim1
-#define  MAX_SUBPOSITION_OVERFLOW 1536
-#define  MAX_ENCODER_PERIOD 3072
+#define  MAX_SUBPOSITION_OVERFLOW 490
+#define  MAX_ENCODER_PERIOD 980
 
 float EncoderVelocity_Update()
 {
@@ -515,8 +512,6 @@ float EncoderVelocity_Update()
 	uint32_t EncoderNowPosition = HTIM_ENCODER.Instance->CNT;
 	uint64_t EncoderNowTimestamp = micros();
 
-	int32_t EncoderPositionDiff;
-	uint64_t EncoderTimeDiff;
 
 	EncoderTimeDiff = EncoderNowTimestamp - EncoderLastTimestamp;
 	EncoderPositionDiff = EncoderNowPosition - EncoderLastPosition;
