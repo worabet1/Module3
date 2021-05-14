@@ -22,7 +22,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,7 +59,11 @@ uint16_t pwm = 0;
 float require = 60;
 int32_t EncoderPositionDiff;
 uint64_t EncoderTimeDiff;
-int r1 = 980;
+char TxDataBuffer[32] =
+{ 0 };
+char RxDataBuffer[32] =
+{ 0 };
+int a0,a1,a2,a3;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,6 +75,7 @@ static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
+int16_t UARTRecieveIT();
 /* USER CODE BEGIN PFP */
 uint64_t micros();
 float EncoderVelocity_Update();
@@ -120,6 +126,10 @@ int main(void)
 	HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
 	HAL_TIM_Base_Start(&htim3);
 	HAL_TIM_PWM_Start(&htim3,TIM_CHANNEL_1);
+	{
+	char temp[] = "Hello world\r\n please type something\r\n";
+	HAL_UART_Transmit(&huart2, (uint8_t*)temp,strlen(temp) ,10);
+	}
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -129,7 +139,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-//
+		/*Method 2 Interrupt Mode*/
+		HAL_UART_Receive_IT(&huart2,  (uint8_t*)RxDataBuffer, 4);
+
+		/*Method 2 W/ 1 Char Received*/
+		int16_t inputchar = UARTRecieveIT();
+		if(inputchar!=-1)
+		{
+
+			sprintf(TxDataBuffer, "ReceivedChar:[%c]\r\n", inputchar);
+			HAL_UART_Transmit(&huart2, (uint8_t*)TxDataBuffer, strlen(TxDataBuffer), 1000);
+		}
+
+
+
 		if(require>0){
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 1);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, 0);
@@ -145,7 +168,7 @@ int main(void)
 			Timestamp_Encoder = micros();
 			EncoderVel = (EncoderVel * 2 + EncoderVelocity_Update()) / 3;
 			vrpm = EncoderVel / 980 *60;
-			if(require>0){
+			if(require>=0){
 				if(vrpm < require){
 					pwm += 10;
 				}
@@ -498,6 +521,38 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+int16_t UARTRecieveIT()
+{
+	static uint32_t dataPos =0;
+	int16_t data=-1;
+	if(huart2.RxXferSize - huart2.RxXferCount!=dataPos)
+	{
+		data=RxDataBuffer[dataPos];
+		dataPos= (dataPos+1)%huart2.RxXferSize;
+	}
+	return data;
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	sprintf(TxDataBuffer, "Received:[%d%d%d%d]\r\n", RxDataBuffer[0],RxDataBuffer[1],RxDataBuffer[2],RxDataBuffer[3]);
+	a0 = RxDataBuffer[0];
+	a1 = RxDataBuffer[1];
+	a2 = RxDataBuffer[2];
+	a3 = RxDataBuffer[3];
+	if(a0 == 115 && a1 == 116 && a2 == 111 && a3 == 112){
+		require = 0;
+	}
+	else if(a0 == 43){
+		require = ((RxDataBuffer[1]-48)*100) + ((RxDataBuffer[2]-48)*10) + ((RxDataBuffer[3]-48)*1);
+	}
+	else if(a0 == 45){
+			require = -1*(((RxDataBuffer[1]-48)*100) + ((RxDataBuffer[2]-48)*10) + ((RxDataBuffer[3]-48)*1));
+		}
+	HAL_UART_Transmit(&huart2, (uint8_t*)TxDataBuffer, strlen(TxDataBuffer),1000);
+}
+
 #define  HTIM_ENCODER htim1
 #define  MAX_SUBPOSITION_OVERFLOW 490
 #define  MAX_ENCODER_PERIOD 980
