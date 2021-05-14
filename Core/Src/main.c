@@ -55,7 +55,7 @@ uint64_t _micros = 0;
 float EncoderVel = 0;
 uint64_t Timestamp_Encoder = 0;
 float  vrpm = 0;
-uint16_t pwm = 0;
+int32_t pwm = 0;
 float require = 60;
 int32_t EncoderPositionDiff;
 uint64_t EncoderTimeDiff;
@@ -64,6 +64,10 @@ char TxDataBuffer[32] =
 char RxDataBuffer[32] =
 { 0 };
 int a0,a1,a2,a3;
+int zerostate = 0;
+int sclk[2] = {0};
+float position = 0;
+float error = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,11 +79,10 @@ static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
-int16_t UARTRecieveIT();
 /* USER CODE BEGIN PFP */
 uint64_t micros();
 float EncoderVelocity_Update();
-
+int16_t UARTRecieveIT();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -139,10 +142,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-		/*Method 2 Interrupt Mode*/
+		//UART Part
 		HAL_UART_Receive_IT(&huart2,  (uint8_t*)RxDataBuffer, 4);
-
-		/*Method 2 W/ 1 Char Received*/
 		int16_t inputchar = UARTRecieveIT();
 		if(inputchar!=-1)
 		{
@@ -152,7 +153,7 @@ int main(void)
 		}
 
 
-
+		//PWM set
 		if(require>0){
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 1);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, 0);
@@ -161,13 +162,13 @@ int main(void)
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, 1);
 		}
-//		//Add LPF?
+		if(pwm<0) pwm =0;
 		if (micros() - Timestamp_Encoder >= 10000)
 		{
 			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm);
 			Timestamp_Encoder = micros();
 			EncoderVel = (EncoderVel * 2 + EncoderVelocity_Update()) / 3;
-			vrpm = EncoderVel / 980 *60;
+			vrpm = EncoderVel / 4072 *60;
 			if(require>=0){
 				if(vrpm < require){
 					pwm += 10;
@@ -185,7 +186,19 @@ int main(void)
 				}
 			}
 		}
-
+		// Set Zero
+		sclk[0] = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7);
+		if(zerostate == 1){
+			if(sclk[0] == 0 && sclk[1] == 1){
+				pwm = 0;
+				position = 0;
+				require = 0;
+				zerostate = 0;
+				error = (TIM1->CNT);
+			}
+		}
+		sclk[1]=sclk[0];
+		position = ((TIM1->CNT) - error)/4072*360;
 	}
   /* USER CODE END 3 */
 }
@@ -305,7 +318,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 980;
+  htim1.Init.Period = 3072;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -518,6 +531,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 4 */
@@ -541,21 +560,26 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	a1 = RxDataBuffer[1];
 	a2 = RxDataBuffer[2];
 	a3 = RxDataBuffer[3];
-	if(a0 == 115 && a1 == 116 && a2 == 111 && a3 == 112){
+	if(a0 == 115 && a1 == 116 && a2 == 111 && a3 == 112){ //stop
 		require = 0;
 	}
-	else if(a0 == 43){
+	else if(a0 == 115 && a1 == 101 && a2 == 116 && a3 == 48){ //set0
+		require = 10;
+		pwm = 1000;
+		zerostate = 1;
+	}
+	else if(a0 == 43){ //+
 		require = ((RxDataBuffer[1]-48)*100) + ((RxDataBuffer[2]-48)*10) + ((RxDataBuffer[3]-48)*1);
 	}
-	else if(a0 == 45){
+	else if(a0 == 45){ //-
 			require = -1*(((RxDataBuffer[1]-48)*100) + ((RxDataBuffer[2]-48)*10) + ((RxDataBuffer[3]-48)*1));
 		}
 	HAL_UART_Transmit(&huart2, (uint8_t*)TxDataBuffer, strlen(TxDataBuffer),1000);
 }
 
 #define  HTIM_ENCODER htim1
-#define  MAX_SUBPOSITION_OVERFLOW 490
-#define  MAX_ENCODER_PERIOD 980
+#define  MAX_SUBPOSITION_OVERFLOW 1536
+#define  MAX_ENCODER_PERIOD 3072
 
 float EncoderVelocity_Update()
 {
