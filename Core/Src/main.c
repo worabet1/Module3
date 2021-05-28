@@ -54,9 +54,10 @@ UART_HandleTypeDef huart2;
 uint64_t _micros = 0;
 float EncoderVel = 0;
 uint64_t Timestamp_Encoder = 0;
+uint64_t Timestamp_Encoder2 = 0;
 float  vrpm = 0;
 int32_t pwm = 0;
-float require = 60;
+float require = 10;
 int32_t EncoderPositionDiff;
 uint64_t EncoderTimeDiff;
 char TxDataBuffer[32] =
@@ -68,6 +69,7 @@ int zerostate = 0;
 int sclk[2] = {0};
 float position = 0;
 float error = 0;
+char status[100];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -168,14 +170,17 @@ int main(void)
 			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm);
 			Timestamp_Encoder = micros();
 			EncoderVel = (EncoderVel * 2 + EncoderVelocity_Update()) / 3;
-			vrpm = EncoderVel / 4072 *60;
-			if(require>=0){
+			vrpm = EncoderVel / 3072 *60;
+			if(require>0){
 				if(vrpm < require){
 					pwm += 10;
 				}
 				else if (vrpm>require){
 					pwm-=10;
 				}
+			}
+			if(require==0){
+				pwm = 0;
 			}
 			if(require<0){
 				if(vrpm > require){
@@ -198,7 +203,17 @@ int main(void)
 			}
 		}
 		sclk[1]=sclk[0];
-		position = ((TIM1->CNT) - error)/4072*360;
+		position = ((TIM1->CNT) - error)/3072*360;
+		if(position<0){
+			position = 360 + position;
+		}
+		if (micros() - Timestamp_Encoder2 >= 100000){
+			int st1 = position;
+			int st2 = vrpm*6;
+			sprintf(status,"Position is %d degree Velocity is %d degree/second \r\n",st1,st2);
+			HAL_UART_Transmit(&huart2, (uint8_t*)status,strlen(status) ,10);
+			Timestamp_Encoder2 = micros();
+		}
 	}
   /* USER CODE END 3 */
 }
@@ -564,7 +579,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 		require = 0;
 	}
 	else if(a0 == 115 && a1 == 101 && a2 == 116 && a3 == 48){ //set0
-		require = 10;
+		require = 3;
 		pwm = 1000;
 		zerostate = 1;
 	}
