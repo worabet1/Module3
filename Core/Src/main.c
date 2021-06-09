@@ -762,11 +762,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 						input = 0;
 					}
 					// Trajectory
-					if(distance>=0){
-						require = -(a*a*ttrajec*ttrajec)+(2*sqrt(vmax)*a*ttrajec);
-					}else{
-						require = (a*a*ttrajec*ttrajec)-(2*sqrt(vmax)*a*ttrajec);
-					}
+//					if(distance>=0){
+//						require = -(a*a*ttrajec*ttrajec)+(2*sqrt(vmax)*a*ttrajec);
+//					}else{
+//						require = (a*a*ttrajec*ttrajec)-(2*sqrt(vmax)*a*ttrajec);
+//					}
 					if(distance >=0){
 						calculatedp = (-(a*a*ttrajec*ttrajec*ttrajec/3) + (sqrt(vmax)*a*ttrajec*ttrajec)) + previous;
 					}else{
