@@ -35,6 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define END_ADDR 0b00100011
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,6 +47,8 @@
 ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
 
+I2C_HandleTypeDef hi2c1;
+
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
@@ -54,34 +57,52 @@ TIM_HandleTypeDef htim5;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-uint32_t ADCData[4]={0};
+uint32_t ADCData[4] = { 0 };
 uint64_t _micros = 0;
 float EncoderVel = 0;
 uint64_t Timestamp_Encoder = 0;
 uint64_t Timestamp_Encoder2 = 0;
 uint64_t Timestamp_Encoder3 = 0;
 uint64_t nx = 0;
-float  vrpm = 0;
+float vrpm = 0;
 float require = 0;
 int32_t EncoderPositionDiff;
 uint64_t EncoderTimeDiff;
-char TxDataBuffer[32] =
-{ 0 };
-char RxDataBuffer[32] =
-{ 0 };
-int a0,a1,a2,a3;
+char TxDataBuffer[32] = { 0 };
+char RxDataBuffer[32] = { 0 };
+int a0, a1, a2, a3;
 int zerostate = 0;
-int sclk[2] = {0};
+int sclk[2] = { 0 };
 float position = 0;
 float error = 0;
 char status[100];
-float Kp=0,Ki=0,Kd=0,errorpid[2] = {0},sumpid = 0,velocity=0;
+float Kp = 2000, Ki = 200, Kd = 800, errorpid[2] = { 0 }, sumpid = 0, velocity =
+		0;
 float pi = 3.14159265358993238462643383;
-float ptg=0,vmax=0,rotationtime=0,a = 0,distance = 0.0,ttrajec = 0,calculatedp = 0,previous = 0;
-int input = 0;
+float ptg = 0, vmax = 0.8, rotationtime = 0, a = 0, distance = 0.0, ttrajec = 0,
+		calculatedp = 0, previous = 0;
+int activate = 0;
 int32_t pwm = 0;
 int emergency = 0;
 int check = 0;
+int buffer[32] = { 0 };
+int pointer = 0;
+int bytecount = 0;
+int mode = 0;
+int enable = 0;
+int stationnumber = 0;
+int frame3check = 0;
+int station[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+int inputchar;
+int indexpos = 0;
+int laserflag = 0;
+int buf = 0;
+int gripperstatus = 0;
+float dumpvmax = 0.8;
+float queue[20] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+float qpointer = 0;
+float allq = 0;
+char temp[];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,10 +115,13 @@ static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM5_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 uint64_t micros();
 float EncoderVelocity_Update();
 int16_t UARTRecieveIT();
+void UARTMode();
+void Laser();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -140,107 +164,93 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM5_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 	HAL_TIM_Base_Start_IT(&htim2);
 	HAL_TIM_Base_Start(&htim3);
-	HAL_TIM_PWM_Start(&htim3,TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
 	HAL_TIM_Base_Start_IT(&htim4);
 	HAL_TIM_Base_Start_IT(&htim5);
 	HAL_ADC_Start_DMA(&hadc1, ADCData, 4);
 	HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
 	{
-	char temp[] = "Hello world\r\n please type something\r\n";
-	HAL_UART_Transmit(&huart2, (uint8_t*)temp,strlen(temp) ,10);
+//		char temp[] = "Hello world\r\n please type something\r\n";
+		uint8_t ack[] = { 0x58, 0x75 };
+		HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
 	}
+//	char temp[] ="\x58\x75";
+//	HAL_UART_Transmit(&huart2, (uint8_t*) temp,
+//			strlen(temp), 1000);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-	while (1)
-	{
+	while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-		check = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11);
+		//I2C
+		Laser();
 		//UART Part
-		HAL_UART_Receive_IT(&huart2,  (uint8_t*)RxDataBuffer, 4);
-		int16_t inputchar = UARTRecieveIT();
-		if(inputchar!=-1)
-		{
-
-			sprintf(TxDataBuffer, "ReceivedChar:[%c]\r\n", inputchar);
-			HAL_UART_Transmit(&huart2, (uint8_t*)TxDataBuffer, strlen(TxDataBuffer), 1000);
+		HAL_UART_Receive_IT(&huart2, (uint8_t*) RxDataBuffer, 4);
+		inputchar = UARTRecieveIT();
+		if (inputchar != -1) {
+//			HAL_Delay(3000);
+			UARTMode();
+//			static uint8_t data[2] = {0x58,0x75};
+//			HAL_UART_Transmit(&huart2, (uint8_t*)data,2, 1000);
+//			sprintf(TxDataBuffer, "\x58\x75");
+//			HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,
+//					strlen(TxDataBuffer), 1000);
 		}
 		//PWM set
-		if(emergency==0){
-			if(require==9988){
+		if (emergency == 0) {
+			if (require == 9988) {
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, 0);
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, 0);
-			}
-			else if(require>0){
+			} else if (require >= 0) {
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, 1);
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, 0);
-			}
-			else if(require<0){
+			} else if (require < 0) {
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, 0);
 				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, 1);
 			}
-			if (micros() - Timestamp_Encoder >= 100)
-			{
+			if (micros() - Timestamp_Encoder >= 100) {
 				__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm);
 				Timestamp_Encoder = micros();
-				EncoderVel =((2*EncoderVel + EncoderVelocity_Update())/3);
-				vrpm = EncoderVel / 524288 *60 ;
+				EncoderVel = ((2 * EncoderVel + EncoderVelocity_Update()) / 3);
+				vrpm = EncoderVel / 524288 * 60;
 			}
 			sclk[0] = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7);
-			if(zerostate == 1){
-				if(sclk[0] == 0 && sclk[1] == 1){
-					pwm = 0;
+			if (zerostate == 1) {
+				require = 0.2;
+				if (sclk[0] == 0 && sclk[1] == 1) {
+					pwm = 1200;
 					position = 0;
 					require = 0;
 					zerostate = 0;
 					error = (TIM5->CNT);
 				}
 			}
-			sclk[1]=sclk[0];
-			position = ((TIM5->CNT) - error)/524288*360;
-			if(position<0){
+			sclk[1] = sclk[0];
+			position = ((TIM5->CNT) - error) / 524288 * 360;
+			if (position < 0) {
 				position = 360 + position;
 			}
-			if (micros() - Timestamp_Encoder2 >= 100000)
-			{
+			if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == 1) {
+				indexpos = position;
+			}
+			if (micros() - Timestamp_Encoder2 >= 100000) {
 				int st1 = position;
-				int st2 = vrpm*6;
-				sprintf(status,"Position is %d degree Velocity is %d degree/second \r\n",st1,st2);
-				HAL_UART_Transmit(&huart2, (uint8_t*)status,strlen(status) ,10);
+				int st2 = vrpm * 6;
+				sprintf(status,
+						"Position is %d degree Velocity is %d degree/second \r\n",
+						st1, st2);
+//				HAL_UART_Transmit(&huart2, (uint8_t*) status, strlen(status),
+//						10);
 				Timestamp_Encoder2 = micros();
 			}
 		}
-
-//		if (micros() - Timestamp_Encoder3 >= 10000)
-//		{
-//			Timestamp_Encoder3 = micros();
-////			if(require>0){
-////						if(vrpm < require){
-////							pwm += 10;
-////						}
-////						else if (vrpm>require){
-////							pwm-=10;
-////						}
-////					}
-////					if(require==0){
-////						pwm = 0;
-////					}
-////					if(require<0){
-////						if(vrpm > require){
-////							pwm += 10;
-////						}
-////						else if (vrpm<require){
-////							pwm-=10;
-////						}
-////					}
-//		}
-		// Set Zero
 
 	}
   /* USER CODE END 3 */
@@ -337,6 +347,40 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -637,64 +681,356 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	if(GPIO_Pin == GPIO_PIN_11)
-	{
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11) == 0){
+void UARTMode() {
+	buffer[pointer] = inputchar;
+	buf = buffer[pointer];
+	if (bytecount == 0) {
+		if (inputchar >= 145 && inputchar <= 158) {
+			pointer = 0;
+			buffer[pointer] = inputchar;
+		}
+		switch (inputchar) {
+		case 145:
+			mode = 1;
+			bytecount += 1;
+			break;
+		case 146:
+			mode = 2;
+			bytecount += 1;
+			break;
+		case 147:
+			mode = 3;
+			bytecount += 1;
+			break;
+		case 148:
+			mode = 4;
+			bytecount += 1;
+			break;
+		case 149:
+			mode = 5;
+			bytecount += 1;
+			break;
+		case 150:
+			mode = 6;
+			bytecount += 1;
+			break;
+		case 151:
+			mode = 7;
+			bytecount += 1;
+			break;
+		case 152:
+			mode = 8;
+			bytecount += 1;
+			break;
+		case 153:
+			mode = 9;
+			bytecount += 1;
+			break;
+		case 154:
+			mode = 10;
+			bytecount += 1;
+			break;
+		case 155:
+			mode = 11;
+			bytecount += 1;
+			break;
+		case 156:
+			mode = 12;
+			bytecount += 1;
+			break;
+		case 157:
+			mode = 13;
+			bytecount += 1;
+			break;
+		case 158:
+			mode = 14;
+			bytecount += 1;
+			break;
+		default:
+			break;
+		}
+	} else if (mode == 2) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			enable = 1;
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 3) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			enable = 0;
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 4) {
+		if (bytecount == 1) {
+			bytecount = 2;
+		} else if (bytecount == 2) {
+			bytecount = 3;
+		} else if (bytecount == 3
+				&& buffer[pointer]
+						== (((buffer[pointer - 1] + buffer[pointer - 2]
+								+ buffer[pointer - 3]) % 256) ^ 0b11111111)) {
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			vmax = buffer[pointer - 1] / 60.0 * 2.0 * 3.141;
+			dumpvmax = vmax;
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 3
+				&& buffer[pointer]
+						!= (((buffer[pointer - 1] + buffer[pointer - 2]
+								+ buffer[pointer - 3]) % 256) ^ 0b11111111)) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 5) {
+		if (bytecount == 1) {
+			bytecount = 2;
+		} else if (bytecount == 2) {
+			bytecount = 3;
+		} else if (bytecount == 3
+				&& buffer[pointer]
+						== (((buffer[pointer - 1] + buffer[pointer - 2]
+								+ buffer[pointer - 3]) % 256) ^ 0b11111111)) {
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			ptg = ((256.0 * buffer[pointer - 2]) + buffer[pointer - 1])
+					/ 10000.0;
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 3
+				&& buffer[pointer]
+						!= (((buffer[pointer - 1] + buffer[pointer - 2]
+								+ buffer[pointer - 3]) % 256) ^ 0b11111111)) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 6) {
+		if (bytecount == 1) {
+			bytecount = 2;
+		} else if (bytecount == 2) {
+			bytecount = 3;
+		} else if (bytecount == 3
+				&& buffer[pointer]
+						== (((buffer[pointer - 1] + buffer[pointer - 2]
+								+ buffer[pointer - 3]) % 256) ^ 0b11111111)) {
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			ptg = station[buffer[pointer - 1] - 1];
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 3
+				&& buffer[pointer]
+						!= (((buffer[pointer - 1] + buffer[pointer - 2]
+								+ buffer[pointer - 3]) % 256) ^ 0b11111111)) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 7) {
+		if (bytecount == 1) {
+			stationnumber = buffer[pointer];
+			frame3check += (buffer[pointer] + buffer[pointer - 1]);
+			bytecount = 2;
+		} else if (bytecount < 2 + stationnumber) {
+			frame3check += buffer[pointer];
+			bytecount += 1;
+		} else if (bytecount == 2 + stationnumber
+				&& buffer[pointer] == ((frame3check % 256) ^ 0b11111111)) {
+			//set goal n station
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			mode = 0;
+			bytecount = 0;
+			frame3check = 0;
+		} else if (bytecount == 2 + stationnumber
+				&& buffer[pointer] != ((frame3check % 256) ^ 0b11111111)) {
+			mode = 0;
+			bytecount = 0;
+			frame3check = 0;
+		}
+	} else if (mode == 8) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			activate = 1;
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 9) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			for (int i = 0;i < 10; ++i) {
+				if (position - station[i] <= 0.01){
+					sprintf(temp,'Station %d',i);
+					HAL_UART_Transmit(&huart2, (uint8_t*) temp, strlen(temp), 10);
+				}
+			}
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 10) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			//request position
+			sprintf(temp,'%d degree',position);
+			HAL_UART_Transmit(&huart2, (uint8_t*) temp, strlen(temp), 10);
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 11) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			//request Max velocity
+			sprintf(temp,'%d rad/s',vmax);
+			HAL_UART_Transmit(&huart2, (uint8_t*) temp, strlen(temp), 10);
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 12) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			//enable gripper
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			laserflag = 1;
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 13) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			//disable gripper
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	} else if (mode == 14) {
+		if (bytecount == 1
+				&& (buffer[pointer] == (buffer[pointer - 1] ^ 0b11111111))) {
+			uint8_t ack[] = { 0x58, 0x75 };
+			HAL_Delay(100);
+			HAL_UART_Transmit(&huart2, (uint8_t*) ack, 2, 10);
+			zerostate = 1;
+			mode = 0;
+			bytecount = 0;
+		} else if (bytecount == 1
+				&& (buffer[pointer] != (buffer[pointer - 1] ^ 0b11111111))) {
+			mode = 0;
+			bytecount = 0;
+		}
+	}
+	pointer += 1;
+	if (pointer > 32)
+		pointer = 0;
+}
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == GPIO_PIN_11) {
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11) == 0) {
 			emergency = 1;
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, 0);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, 0);
 			pwm = 9000;
-
-		}else{
+		} else {
+			require = 0;
+			ttrajec = rotationtime +1;
+			pwm = 0;
 			emergency = 0;
+			sumpid = 0;
+			zerostate = 0;
 		}
 
 	}
 }
-int16_t UARTRecieveIT()
-{
-	static uint32_t dataPos =0;
-	int16_t data=-1;
-	if(huart2.RxXferSize - huart2.RxXferCount!=dataPos)
-	{
-		data=RxDataBuffer[dataPos];
-		dataPos= (dataPos+1)%huart2.RxXferSize;
+int16_t UARTRecieveIT() {
+	static uint32_t dataPos = 0;
+	int16_t data = -1;
+	if (huart2.RxXferSize - huart2.RxXferCount != dataPos) {
+		data = RxDataBuffer[dataPos];
+		dataPos = (dataPos + 1) % huart2.RxXferSize;
 	}
 	return data;
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-	sprintf(TxDataBuffer, "Received:[%d%d%d%d]\r\n", RxDataBuffer[0],RxDataBuffer[1],RxDataBuffer[2],RxDataBuffer[3]);
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	sprintf(TxDataBuffer, "Received:[%d%d%d%d]\r\n", RxDataBuffer[0],
+			RxDataBuffer[1], RxDataBuffer[2], RxDataBuffer[3]);
 	a0 = RxDataBuffer[0];
 	a1 = RxDataBuffer[1];
 	a2 = RxDataBuffer[2];
 	a3 = RxDataBuffer[3];
-	if(a0 == 115 && a1 == 116 && a2 == 111 && a3 == 112){ //stop
+	if (a0 == 115 && a1 == 116 && a2 == 111 && a3 == 112) { //stop
 		require = 0;
-	}
-	else if(a0 == 115 && a1 == 101 && a2 == 116 && a3 == 48){ //set0
+	} else if (a0 == 115 && a1 == 101 && a2 == 116 && a3 == 48) { //set0
 		require = 3;
 		pwm = 1000;
 		zerostate = 1;
+	} else if (a0 == 43) { //+
+		require = ((RxDataBuffer[1] - 48) * 100) + ((RxDataBuffer[2] - 48) * 10)
+				+ ((RxDataBuffer[3] - 48) * 1);
+	} else if (a0 == 45) { //-
+		require = -1
+				* (((RxDataBuffer[1] - 48) * 100)
+						+ ((RxDataBuffer[2] - 48) * 10)
+						+ ((RxDataBuffer[3] - 48) * 1));
 	}
-	else if(a0 == 43){ //+
-		require = ((RxDataBuffer[1]-48)*100) + ((RxDataBuffer[2]-48)*10) + ((RxDataBuffer[3]-48)*1);
-	}
-	else if(a0 == 45){ //-
-			require = -1*(((RxDataBuffer[1]-48)*100) + ((RxDataBuffer[2]-48)*10) + ((RxDataBuffer[3]-48)*1));
-		}
-	HAL_UART_Transmit(&huart2, (uint8_t*)TxDataBuffer, strlen(TxDataBuffer),1000);
+//	HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer, strlen(TxDataBuffer),
+//			1000);
 }
 
 #define  HTIM_ENCODER htim5
 #define  MAX_SUBPOSITION_OVERFLOW 262144
 #define  MAX_ENCODER_PERIOD 524288
 
-float EncoderVelocity_Update()
-{
+float EncoderVelocity_Update() {
 	//Save Last state
 	static uint32_t EncoderLastPosition = 0;
 	static uint64_t EncoderLastTimestamp = 0;
@@ -703,17 +1039,13 @@ float EncoderVelocity_Update()
 	uint32_t EncoderNowPosition = HTIM_ENCODER.Instance->CNT;
 	uint64_t EncoderNowTimestamp = micros();
 
-
 	EncoderTimeDiff = EncoderNowTimestamp - EncoderLastTimestamp;
 	EncoderPositionDiff = EncoderNowPosition - EncoderLastPosition;
 
 	//compensate overflow and underflow
-	if (EncoderPositionDiff >= MAX_SUBPOSITION_OVERFLOW)
-	{
+	if (EncoderPositionDiff >= MAX_SUBPOSITION_OVERFLOW) {
 		EncoderPositionDiff -= MAX_ENCODER_PERIOD;
-	}
-	else if (-EncoderPositionDiff >= MAX_SUBPOSITION_OVERFLOW)
-	{
+	} else if (-EncoderPositionDiff >= MAX_SUBPOSITION_OVERFLOW) {
 		EncoderPositionDiff += MAX_ENCODER_PERIOD;
 	}
 
@@ -726,78 +1058,97 @@ float EncoderVelocity_Update()
 	return (EncoderPositionDiff * 1000000) / (float) EncoderTimeDiff;
 
 }
-
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-	if (htim == &htim2)
-	{
+void Laser() {
+	if (laserflag == 1 && hi2c1.State == HAL_I2C_STATE_READY) {
+		static uint8_t data[1] = { 0x45 };
+		HAL_I2C_Master_Transmit(&hi2c1, END_ADDR << 1, data, 1, 1000);
+		laserflag = 0;
+	}
+}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	if (htim == &htim2) {
 		_micros += 4294967295;
 	}
-	if(htim == &htim4)
-	{
-		if(emergency == 0){
-			if(input == 1){
-						ttrajec = 0;
-			//			vmax = 1.04;
-			//			ptg = 2*pi;
-						if(ptg < (2*pi/360*position)){
-							if (((2*pi/360*position)-ptg) <= (2*pi -(2*pi/360*position)+ ptg)){
-								distance = ptg - (2*pi/360*position);
-							}
-							else{
-								distance = 2*pi -(2*pi/360*position)+ ptg;
-							}
+	if (htim == &htim4) {
+		if (emergency == 0) {
+			if (zerostate == 0) {
+				if (activate == 1) {
+					ttrajec = 0;
+					if (ptg < (2 * pi / 360 * position)) {
+						if (((2 * pi / 360 * position) - ptg)
+								<= (2 * pi - (2 * pi / 360 * position) + ptg)) {
+							distance = ptg - (2 * pi / 360 * position);
+						} else {
+							distance = 2 * pi - (2 * pi / 360 * position) + ptg;
 						}
-						else if (ptg >= (2*pi/360*position)){
-							if (ptg - (2*pi/360*position) <= 2*pi - ptg + (2*pi/360*position)){
-								distance = ptg - (2*pi/360*position);
-							}
-							else{
-								distance = -(2*pi - ptg + (2*pi/360*position));
-							}
+					} else if (ptg >= (2 * pi / 360 * position)) {
+						if (ptg - (2 * pi / 360 * position)
+								<= 2 * pi - ptg + (2 * pi / 360 * position)) {
+							distance = ptg - (2 * pi / 360 * position);
+						} else {
+							distance = -(2 * pi - ptg
+									+ (2 * pi / 360 * position));
 						}
-						if(distance>=0)rotationtime = (3.00*distance)/(2*vmax);
-						else rotationtime = -(3.00*distance)/(2*vmax) ;
-						a = 2 * sqrt(vmax) / rotationtime;
-						input = 0;
 					}
-					// Trajectory
-//					if(distance>=0){
-//						require = -(a*a*ttrajec*ttrajec)+(2*sqrt(vmax)*a*ttrajec);
-//					}else{
-//						require = (a*a*ttrajec*ttrajec)-(2*sqrt(vmax)*a*ttrajec);
-//					}
-					if(distance >=0){
-						calculatedp = (-(a*a*ttrajec*ttrajec*ttrajec/3) + (sqrt(vmax)*a*ttrajec*ttrajec)) + previous;
-					}else{
-						calculatedp = ((a*a*ttrajec*ttrajec*ttrajec/3) - (sqrt(vmax)*a*ttrajec*ttrajec)) + previous;
+					if (distance >= 0) {
+						if (8/5*vmax*vmax/distance>=0.5){
+							vmax = sqrt(0.5*distance*3/8);
+						}
+						rotationtime = (3.00 * distance) / (2 * vmax);
+					} else {
+						if (-8/5*vmax*vmax/distance>=0.5){
+							vmax = sqrt(-0.5*distance*3/8);
+						}
+						rotationtime = -(3.00 * distance) / (2 * vmax);
 					}
-					ttrajec += 0.001;
-					if(ttrajec >= rotationtime){
-						a = 0;
-						previous = 2*pi/360*position;
-						sumpid = 0;
-					}
-					// PID
-					velocity = EncoderVel / 524288 *(2*pi);
-					if(require<0){
-						errorpid[0] = velocity -require;
-					}
-					if(require>=0){
-						errorpid[0] = require - velocity;
-					}
-					sumpid = sumpid +errorpid[0];
-					pwm = Kp*errorpid[0] + Ki * sumpid + Kd * (errorpid[0]-errorpid[1]);
-					errorpid[1] = errorpid[0];
-					if(pwm<0){
-						pwm = -pwm;
-					}
-					if(pwm>9001) pwm = 9000;
+					a = 2 * sqrt(vmax) / rotationtime;
+					activate = 0;
+				}
+				if (distance >= 0) {
+					require = -(a * a * ttrajec * ttrajec)
+							+ (2 * sqrt(vmax) * a * ttrajec);
+				} else {
+					require = (a * a * ttrajec * ttrajec)
+							- (2 * sqrt(vmax) * a * ttrajec);
+				}
+				if (distance >= 0) {
+					calculatedp = (-(a * a * ttrajec * ttrajec * ttrajec / 3)
+							+ (sqrt(vmax) * a * ttrajec * ttrajec)) + previous;
+				} else {
+					calculatedp = ((a * a * ttrajec * ttrajec * ttrajec / 3)
+							- (sqrt(vmax) * a * ttrajec * ttrajec)) + previous;
+				}
+				ttrajec += 0.001;
+				if (ttrajec >= rotationtime) {
+					a = 0;
+					previous = 2 * pi / 360 * position;
+					sumpid = 0;
+					vmax = dumpvmax;
+				}
+			}
+			// PID
+			velocity = EncoderVel / 524288 * (2 * pi);
+			if (require == 0)
+			errorpid[0] = 0;
+			if (require < 0) {
+				errorpid[0] = velocity - require;
+			}
+			if (require > 0) {
+				errorpid[0] = require - velocity;
+			}
+			sumpid = sumpid + errorpid[0];
+			pwm = Kp * errorpid[0] + Ki * sumpid
+					+ Kd * (errorpid[0] - errorpid[1]);
+			errorpid[1] = errorpid[0];
+			if (pwm < 0) {
+				pwm = -pwm;
+			}
+			if (pwm > 9001)
+				pwm = 9000;
 		}
 	}
 }
-uint64_t micros()
-{
+uint64_t micros() {
 	return _micros + htim2.Instance->CNT;
 }
 /* USER CODE END 4 */
@@ -811,8 +1162,7 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
-	while (1)
-	{
+	while (1) {
 	}
   /* USER CODE END Error_Handler_Debug */
 }
